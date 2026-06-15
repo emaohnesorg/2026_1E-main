@@ -43,14 +43,16 @@ def choose_command(snapshot: dict[str, Any]) -> str:
     piece = snapshot["currentPiece"]
     board = snapshot["board"]
 
-    # nová kostka
     if piece["type"] != current_piece_type:
         current_piece_type = piece["type"]
         target_column = choose_best_column(board)
 
     x = piece["x"]
 
-    if x < target_column:
+    piece_width = len(piece["matrix"][0])
+    max_x = 10 - piece_width
+
+    if x < target_column and x < max_x:
         return "right"
 
     if x > target_column:
