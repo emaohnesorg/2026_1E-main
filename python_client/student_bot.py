@@ -1,20 +1,17 @@
 from __future__ import annotations
 from typing import Any
 
-# =========================
-# ROTATION
-# =========================
+
 def rotate(m):
     return [list(row) for row in zip(*m[::-1])]
 
 
-# =========================
-# BOARD HELPERS
-# =========================
 def clear_lines(board):
-    new_board = [row for row in board if not all(row)]
+    new_board = [row[:] for row in board if not all(row)]
+
     while len(new_board) < 20:
         new_board.insert(0, [0] * 10)
+
     return new_board
 
 
@@ -36,16 +33,17 @@ def drop(board, matrix, x):
                     collision = True
                     break
 
-                if by >= 0 and board[by][bx]:
+                if board[by][bx]:
                     collision = True
                     break
 
+            if collision:
+                break
+
         if collision:
-            break
+            return y
 
         y += 1
-
-    return y
 
 
 def place(board, matrix, x, y):
@@ -56,149 +54,128 @@ def place(board, matrix, x, y):
             if matrix[py][px]:
                 by = y + py
                 bx = x + px
+
                 if 0 <= by < 20:
                     b[by][bx] = 1
+
     return b
 
 
-# =========================
-# HEURISTIC
-# =========================
 def evaluate(board):
     heights = [0] * 10
     holes = 0
     bumpiness = 0
-    full_lines = 0
 
-    # heights + holes
     for x in range(10):
-        seen = False
-        col_height = 0
+        found_block = False
 
         for y in range(20):
             if board[y][x]:
-                if not seen:
-                    col_height = 20 - y
-                    seen = True
+                if not found_block:
+                    heights[x] = 20 - y
+                    found_block = True
             else:
-                if seen:
+                if found_block:
                     holes += 1
 
-        heights[x] = col_height
-
-    # bumpiness
     for x in range(9):
         bumpiness += abs(heights[x] - heights[x + 1])
 
-    # lines
-    for y in range(20):
-        if all(board[y]):
-            full_lines += 1
+    max_height = max(heights)
+
+    flatness = 0
+    avg = sum(heights) / 10
+
+    for h in heights:
+        flatness -= abs(h - avg)
 
     return (
-        sum(heights) * 0.5 +
-        holes * 12 +
-        bumpiness * 0.3 -
-        full_lines * 100
+        holes * 120 +
+        sum(heights) * 0.4 +
+        bumpiness * 0.8 +
+        max_height * 25 +
+        flatness * 0.2
     )
 
 
-# =========================
-# SEARCH
-# =========================
 def search(board, piece):
+    best_score = float("inf")
+    best_move = (0, piece["x"])
+
     base = piece["matrix"]
 
-    best_score = float("inf")
-    best_move = (0, 0)
+    for rotations in range(4):
 
-    for r in range(4):
-        m = base
-        for _ in range(r):
-            m = rotate(m)
+        matrix = base
 
-        width = len(m[0])
+        for _ in range(rotations):
+            matrix = rotate(matrix)
+
+        width = len(matrix[0])
 
         for x in range(10 - width + 1):
-            # simulate drop + validity
-            y = 0
-            while True:
-                collision = False
-                for py in range(len(m)):
-                    for px in range(len(m[py])):
-                        if not m[py][px]:
-                            continue
 
-                        bx = x + px
-                        by = y + py
+            y = drop(board, matrix, x)
 
-                        if by >= 20:
-                            collision = True
-                            break
+            simulated = place(board, matrix, x, y)
 
-                        if by >= 0 and board[by][bx]:
-                            collision = True
-                            break
-                    if collision:
-                        break
+            lines = 0
+            for row in simulated:
+                if all(row):
+                    lines += 1
 
-                if collision:
-                    break
+            simulated = clear_lines(simulated)
 
-                y += 1
+            score = evaluate(simulated)
 
-            y -= 1
-
-            if y < 0:
-                continue
-
-            # place
-            b = place(board, m, x, y)
-            b = clear_lines(b)
-
-            score = evaluate(b)
+            score -= lines * 10000
 
             if score < best_score:
                 best_score = score
-                best_move = (r, x)
+                best_move = (rotations, x)
 
     return best_move
 
 
-# =========================
-# BOT STATE
-# =========================
-current_piece_type = None
 plan = []
 
+last_spawn_signature = None
 
-# =========================
-# MAIN
-# =========================
+
 def choose_command(snapshot: dict[str, Any]) -> str:
-    global current_piece_type, plan
+    global plan
+    global last_spawn_signature
 
     piece = snapshot["currentPiece"]
     board = snapshot["board"]
-    if piece["type"] != current_piece_type:
-        current_piece_type = piece["type"]
 
-        r, target_x = search(board, piece)
+    spawn_signature = (
+        piece["type"],
+        piece["x"],
+        piece["y"]
+    )
+
+    if piece["y"] <= 1 and spawn_signature != last_spawn_signature:
+
+        last_spawn_signature = spawn_signature
+
+        rotations, target_x = search(board, piece)
 
         plan = []
-        plan += ["rotate"] * r
-        # stabilizace rotace (důležité!)
-        plan += ["down"] * 2
+
+        for _ in range(rotations):
+            plan.append("rotate")
 
         dx = target_x - piece["x"]
+
         if dx > 0:
             plan += ["right"] * dx
         elif dx < 0:
             plan += ["left"] * (-dx)
 
-        plan += ["drop"]
+        plan.append("drop")
 
-    if not plan:
-        return "drop"
+    if plan:
+        return plan.pop(0)
 
-    return plan.pop(0)
+    return "down"
